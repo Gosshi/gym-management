@@ -1,0 +1,22 @@
+{
+  "name": "gym-management",
+  "version": "0.0.1",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "api:lint": "spectral lint openapi/openapi.yaml --ruleset spectral:oas -f stylish -v && echo ✅ Lint passed",
+    "api:docs": "npx @redocly/cli@latest build-docs ./src/openapi/openapi.yaml -o ./web/public/api.html && wslview ./web/public/api.html",
+    "api:docs:build": "redocly build-docs openapi/openapi.yaml -o web/public/api.html",
+    "api:ts": "openapi-typescript ./src/openapi/openapi.yaml -o web/src/lib/api/types.ts",
+    "api:preview": "redoc-cli serve ./src/openapi/openapi.json"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@redocly/cli": "^2.0.2",
+    "@stoplight/spectral-cli": "^6.15.0",
+    "openapi-typescript": "^7.9.0",
+    "redoc-cli": "^0.13.21"
+  }
+}

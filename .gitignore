@@ -1,0 +1,44 @@
+# Go
+/bin/
+/bin
+/build/
+/build
+/dist/
+/dist
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.log
+*.tmp
+*.swp
+*.DS_Store
+*.vscode/
+.idea/
+.env
+.env.*
+node_modules/
+web/node_modules/
+web/dist/
+web/.next/
+web/.nuxt/
+web/.cache/
+web/.env*
+# Dependency directories
+gopath/
+# IDE files
+*.iml
+*.sublime*
+*.code-workspace
+# OS files
+Thumbs.db
+.DS_Store
+# Migration/DB
+*.sqlite3
+*.db
+migrations/*.log
+# Others
+coverage.out

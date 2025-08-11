@@ -1,0 +1,583 @@
+openapi: 3.0.3
+info:
+  title: Gym Utilization & Maintenance API (MVP, No-Reservation)
+  version: 0.1.0
+  description: |
+    MVP for small gyms to track real-time utilization of equipment groups, optional per-unit tracking, inspections,
+    and maintenance tickets (tickets endpoints can be added later). This draft focuses on **utilization sessions**
+    without reservations. Designed to evolve: you can later add `resources` (individual units) and `reservations` as
+    optional modules without breaking current clients.
+servers:
+  - url: https://api.example.com/v1
+    description: Production
+  - url: http://localhost:8080/v1
+    description: Local
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    GymId:
+      name: X-Gym-ID
+      in: header
+      required: true
+      description: Current gym/tenant context. Owner accounts can switch gyms.
+      schema:
+        type: string
+        example: gym_7q2k9a
+    PaginationLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    PaginationCursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        description: Opaque cursor for forward pagination
+    TimeFrom:
+      name: from
+      in: query
+      schema:
+        type: string
+        format: date-time
+    TimeTo:
+      name: to
+      in: query
+      schema:
+        type: string
+        format: date-time
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: Machine-readable error code
+        details:
+          type: object
+          additionalProperties: true
+    Page:
+      type: object
+      properties:
+        next_cursor:
+          type: string
+          nullable: true
+    Role:
+      type: string
+      enum: [OWNER, STAFF, MEMBER]
+    User:
+      type: object
+      required: [id, email, role, gym_id, is_active]
+      properties:
+        id: { type: string, example: usr_9f2a1 }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/Role' }
+        gym_id: { type: string }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+    AuthLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+    AuthLoginResponse:
+      type: object
+      required: [access_token, refresh_token, user]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        user: { $ref: '#/components/schemas/User' }
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    Gym:
+      type: object
+      required: [id, name, timezone]
+      properties:
+        id: { type: string, example: gym_7q2k9a }
+        name: { type: string }
+        timezone: { type: string, example: Asia/Tokyo }
+        created_at: { type: string, format: date-time }
+
+    Zone:
+      type: object
+      required: [id, gym_id, name]
+      properties:
+        id: { type: string, example: zn_a12bc }
+        gym_id: { type: string }
+        name: { type: string, example: Free Weight Area }
+        created_at: { type: string, format: date-time }
+
+    ResourceGroup:
+      type: object
+      required: [id, gym_id, name, capacity]
+      properties:
+        id: { type: string, example: grp_rack }
+        gym_id: { type: string }
+        zone_id: { type: string, nullable: true }
+        name: { type: string, example: Power Rack }
+        capacity: { type: integer, example: 3 }
+        rules_json:
+          type: object
+          additionalProperties: true
+          description: "Arbitrary rules e.g. { max_minutes: 30 }"
+        created_at: { type: string, format: date-time }
+
+    Resource:
+      type: object
+      required: [id, gym_id, group_id, label]
+      properties:
+        id: { type: string, example: res_rack_A }
+        gym_id: { type: string }
+        group_id: { type: string }
+        label: { type: string, example: Rack A }
+        external_id: { type: string, nullable: true, description: QR/NFC code }
+        status: { type: string, enum: [active, maintenance, retired], default: active }
+        created_at: { type: string, format: date-time }
+
+    Member:
+      type: object
+      required: [id, gym_id, name]
+      properties:
+        id: { type: string, example: mbr_42 }
+        gym_id: { type: string }
+        name: { type: string }
+        external_member_id: { type: string, nullable: true }
+        status: { type: string, enum: [active, suspended, canceled], default: active }
+        created_at: { type: string, format: date-time }
+
+    UtilizationSession:
+      type: object
+      required: [id, gym_id, group_id, started_at, status]
+      properties:
+        id: { type: string, example: ses_1z9y8 }
+        gym_id: { type: string }
+        group_id: { type: string }
+        resource_id: { type: string, nullable: true }
+        member_id: { type: string, nullable: true }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time, nullable: true }
+        duration_sec: { type: integer, nullable: true }
+        status: { type: string, enum: [active, ended, canceled], default: active }
+        source: { type: string, enum: [self, staff, api], default: self }
+        anomalies_json:
+          type: object
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+
+    DashboardNow:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              group_id: { type: string }
+              name: { type: string }
+              capacity: { type: integer }
+              active_sessions: { type: integer }
+              estimated_wait_minutes: { type: integer, nullable: true }
+
+    AuditLog:
+      type: object
+      required: [id, gym_id, actor_user_id, action, entity, entity_id, created_at]
+      properties:
+        id: { type: string, example: log_77 }
+        gym_id: { type: string }
+        actor_user_id: { type: string }
+        action: { type: string, example: update }
+        entity: { type: string, example: resource_group }
+        entity_id: { type: string }
+        diff_json:
+          type: object
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+
+paths:
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and obtain JWTs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthLoginRequest' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthLoginResponse' }
+        '401': { description: Unauthorized, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthLoginResponse' } } } }
+        '401': { description: Unauthorized, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /gyms/me:
+    get:
+      tags: [Gyms]
+      summary: Get current gym context
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Gym' } } } }
+        '404': { description: Not Found }
+
+  /zones:
+    get:
+      tags: [Zones]
+      summary: List zones
+      parameters: [ { $ref: '#/components/parameters/GymId' }, { $ref: '#/components/parameters/PaginationLimit' }, { $ref: '#/components/parameters/PaginationCursor' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                allOf: [ { $ref: '#/components/schemas/Page' } ]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Zone' }
+    post:
+      tags: [Zones]
+      summary: Create zone
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Zone' } } } }
+
+  /zones/{zone_id}:
+    patch:
+      tags: [Zones]
+      summary: Update zone
+      parameters:
+        - { $ref: '#/components/parameters/GymId' }
+        - name: zone_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Zone' } } } }
+
+  /resource-groups:
+    get:
+      tags: [ResourceGroups]
+      summary: List resource groups
+      parameters: [ { $ref: '#/components/parameters/GymId' }, { $ref: '#/components/parameters/PaginationLimit' }, { $ref: '#/components/parameters/PaginationCursor' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                allOf: [ { $ref: '#/components/schemas/Page' } ]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ResourceGroup' }
+    post:
+      tags: [ResourceGroups]
+      summary: Create a resource group
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, capacity]
+              properties:
+                name: { type: string }
+                zone_id: { type: string, nullable: true }
+                capacity: { type: integer }
+                rules_json: { type: object, additionalProperties: true }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceGroup' } } } }
+
+  /resource-groups/{group_id}:
+    patch:
+      tags: [ResourceGroups]
+      summary: Update a resource group
+      parameters:
+        - { $ref: '#/components/parameters/GymId' }
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                zone_id: { type: string, nullable: true }
+                capacity: { type: integer }
+                rules_json: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ResourceGroup' } } } }
+
+  /resources:
+    get:
+      tags: [Resources]
+      summary: List resources (optional per-unit tracking)
+      parameters: [ { $ref: '#/components/parameters/GymId' }, { $ref: '#/components/parameters/PaginationLimit' }, { $ref: '#/components/parameters/PaginationCursor' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                allOf: [ { $ref: '#/components/schemas/Page' } ]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Resource' }
+    post:
+      tags: [Resources]
+      summary: Create resource
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group_id, label]
+              properties:
+                group_id: { type: string }
+                label: { type: string }
+                external_id: { type: string, nullable: true }
+                status: { type: string, enum: [active, maintenance, retired] }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Resource' } } } }
+
+  /resources/{resource_id}:
+    patch:
+      tags: [Resources]
+      summary: Update resource
+      parameters:
+        - { $ref: '#/components/parameters/GymId' }
+        - name: resource_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+                group_id: { type: string }
+                external_id: { type: string, nullable: true }
+                status: { type: string, enum: [active, maintenance, retired] }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Resource' } } } }
+
+  /members:
+    get:
+      tags: [Members]
+      summary: List members
+      parameters: [ { $ref: '#/components/parameters/GymId' }, { $ref: '#/components/parameters/PaginationLimit' }, { $ref: '#/components/parameters/PaginationCursor' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                allOf: [ { $ref: '#/components/schemas/Page' } ]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Member' }
+    post:
+      tags: [Members]
+      summary: Create member
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                external_member_id: { type: string, nullable: true }
+                status: { type: string, enum: [active, suspended, canceled] }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Member' } } } }
+
+  /sessions:
+    get:
+      tags: [Utilization]
+      summary: List sessions (historical)
+      parameters:
+        - { $ref: '#/components/parameters/GymId' }
+        - { $ref: '#/components/parameters/TimeFrom' }
+        - { $ref: '#/components/parameters/TimeTo' }
+        - name: group_id
+          in: query
+          schema: { type: string }
+        - name: member_id
+          in: query
+          schema: { type: string }
+        - { $ref: '#/components/parameters/PaginationLimit' }
+        - { $ref: '#/components/parameters/PaginationCursor' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                allOf: [ { $ref: '#/components/schemas/Page' } ]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/UtilizationSession' }
+    post:
+      tags: [Utilization]
+      summary: Start a session (check-in)
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [group_id]
+              properties:
+                group_id: { type: string }
+                resource_id: { type: string, nullable: true }
+                member_id: { type: string, nullable: true }
+                source: { type: string, enum: [self, staff, api], default: self }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/UtilizationSession' } } } }
+        '409': { description: Conflict (double session or capacity exceeded), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /sessions/{session_id}/end:
+    patch:
+      tags: [Utilization]
+      summary: End a session (check-out now)
+      parameters:
+        - { $ref: '#/components/parameters/GymId' }
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ended_at:
+                  type: string
+                  format: date-time
+                  description: Optional override (defaults to now)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/UtilizationSession' } } } }
+        '404': { description: Not Found }
+
+  /dashboard/now:
+    get:
+      tags: [Dashboard]
+      summary: Current utilization per group
+      parameters: [ { $ref: '#/components/parameters/GymId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DashboardNow' } } } }
+
+  /audit-logs:
+    get:
+      tags: [Audit]
+      summary: List audit logs
+      parameters:
+        - { $ref: '#/components/parameters/GymId' }
+        - name: entity
+          in: query
+          schema: { type: string }
+        - name: entity_id
+          in: query
+          schema: { type: string }
+        - { $ref: '#/components/parameters/PaginationLimit' }
+        - { $ref: '#/components/parameters/PaginationCursor' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                allOf: [ { $ref: '#/components/schemas/Page' } ]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditLog' }
+
+tags:
+  - name: Auth
+  - name: Gyms
+  - name: Zones
+  - name: ResourceGroups
+  - name: Resources
+  - name: Members
+  - name: Utilization
+  - name: Dashboard
+  - name: Audit
