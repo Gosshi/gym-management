@@ -45,10 +45,9 @@ func main() {
 		},
 	}))
 
-	s := &Server{}
-	api.RegisterHandlersWithOptions(r, s, api.GinServerOptions{
-	BaseURL: "/v1",
-})
+	s := &Server{st: newStore()}
+	v1 := r.Group("/v1")
+	api.RegisterHandlers(v1, s)
 
 	log.Println("listening on :8080")
 	_ = r.Run(":8080")
